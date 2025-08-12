@@ -5,6 +5,7 @@ import httpx
 from fastapi import HTTPException
 from datetime import datetime
 import time
+import asyncio
 
 app = FastAPI(title="Cool Toolbox API")
 
@@ -26,23 +27,28 @@ app.add_middleware(
 def health():
     return {"status": "ok"}
 
-# --- simple in-memory cache ---
+import threading
+
 _CACHE: dict[tuple[str, str, int, str], dict] = {}
 _CACHE_TS: dict[tuple[str, str, int, str], float] = {}
+_CACHE_LOCK = threading.Lock()
 TTL_SECONDS = 15 * 60  # 15 minutes
 
 def _cache_get(key):
-    ts = _CACHE_TS.get(key)
-    if ts and (time.time() - ts) < TTL_SECONDS:
-        return _CACHE.get(key)
-    return None
+    with _CACHE_LOCK:
+        ts = _CACHE_TS.get(key)
+        if ts and (time.time() - ts) < TTL_SECONDS:
+            return _CACHE.get(key)
+        return None
 
 def _cache_set(key, value):
-    _CACHE[key] = value
+    with _CACHE_LOCK:
+        _CACHE[key] = value
+        _CACHE_TS[key] = time.time()
     _CACHE_TS[key] = time.time()
 
 @app.get("/btc-history")
-def btc_history(days: int = 365, vs_currency: str = "usd", interval: str = "daily"):
+async def btc_history(days: int = 365, vs_currency: str = "usd", interval: str = "daily"):
     """
     Get BTC prices for the last N days from CoinGecko, with caching & backoff.
     """
@@ -63,45 +69,53 @@ def btc_history(days: int = 365, vs_currency: str = "usd", interval: str = "dail
 
     # 2) minimal retries & backoff
     last_err = None
-    for attempt in range(3):
-        try:
-            r = httpx.get(url, params=params, headers=headers, timeout=15)
-            if r.status_code == 429:
-                # Backoff using Retry-After if provided, else 1.5s * attempt
-                retry_after = r.headers.get("Retry-After")
-                delay = float(retry_after) if retry_after else (1.5 * (attempt + 1))
-                time.sleep(delay)
-                continue
-            r.raise_for_status()
-            data = r.json()
+    max_attempts = 3
+    async with httpx.AsyncClient() as client:
+        for attempt in range(max_attempts):
+            try:
+                r = await client.get(url, params=params, headers=headers, timeout=15)
+                if r.status_code == 429:
+                    # Backoff using Retry-After if provided, else 1.5s * attempt
+                    retry_after = r.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else (1.5 * (attempt + 1))
+                    except Exception:
+                        delay = 1.5 * (attempt + 1)
+                    await asyncio.sleep(delay)
+                    continue
+                r.raise_for_status()
+                data = r.json()
 
-            prices = [
-                {
-                    "date": datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d"),
-                    "price": price,
+                prices = [
+                    {
+                        "date": datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d"),
+                        "price": price,
+                    }
+                    for ts, price in data.get("prices", [])
+                ]
+                payload = {
+                    "asset": "BTC",
+                    "vs_currency": vs_currency.upper(),
+                    "days": days,
+                    "interval": interval,
+                    "prices": prices,
+                    "source": "coingecko",
+                    "cached": False,
                 }
-                for ts, price in data.get("prices", [])
-            ]
-            payload = {
-                "asset": "BTC",
-                "vs_currency": vs_currency.upper(),
-                "days": days,
-                "interval": interval,
-                "prices": prices,
-                "source": "coingecko",
-                "cached": False,
-            }
-            _cache_set(key, payload)
-            return payload
+                _cache_set(key, payload)
+                return payload
 
-        except Exception as e:
-            last_err = e
-            time.sleep(0.8 * (attempt + 1))
-
+            except Exception as e:
+                last_err = e
     # 3) if we failed after retries, return stale cache if we have it
-    if key in _CACHE:
-        payload = _CACHE[key].copy()
+    with _CACHE_LOCK:
+        if key in _CACHE:
+            payload = _CACHE[key].copy()
+            payload["cached"] = True  # tell the client it’s from cache
+            return payload
         payload["cached"] = True  # tell the client it’s from cache
         return payload
 
-    raise HTTPException(status_code=503, detail=f"Upstream error: {last_err}")
+    import logging
+    logging.error(f"Upstream error in /btc-history: {last_err}")
+    raise HTTPException(status_code=503, detail="Upstream service unavailable. Please try again later.")

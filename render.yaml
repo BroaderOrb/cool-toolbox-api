@@ -3,4 +3,5 @@ services:
     name: cool-toolbox-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api.app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: bash -lc "uvicorn api.app.main:app --host 0.0.0.0 --port $PORT"
+

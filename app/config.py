@@ -24,4 +24,4 @@ class Settings(BaseSettings):
     )
 
 # Create a single settings instance
-settings = Settings()
+settings = Settings() 

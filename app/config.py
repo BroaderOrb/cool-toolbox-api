@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     allowed_origins: List[str] = [
         "https://cool-toolbox.com",
         "https://www.cool-toolbox.com",
-        "http://localhost:3000",  # local frontend
+        "http://localhost:3000"  # local frontend
     ]
 
     # Supabase config

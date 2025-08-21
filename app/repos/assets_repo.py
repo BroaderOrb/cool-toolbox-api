@@ -42,7 +42,7 @@ def resolve_symbol_to_cgid(symbol: str) -> dict:
     Raises if nothing found.
     """
     symu = symbol.upper()
-
+    print("AEHBUGBUG0", r.json().get("coins"))
     # 1) curated
     if symu in PREFERRED:
         cg_id = PREFERRED[symu]
@@ -50,6 +50,7 @@ def resolve_symbol_to_cgid(symbol: str) -> dict:
         try:
             r = httpx.get("https://api.coingecko.com/api/v3/search",
                           params={"query": symu}, headers=_headers(), timeout=20)
+            print("AEHBUGBUG1", r.json().get("coins"))
             if r.status_code == 200:
                 for c in r.json().get("coins", []):
                     if c.get("id") == cg_id:

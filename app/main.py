@@ -5,6 +5,9 @@ from .routers.history import router as history_router
 
 app = FastAPI(title="Cool Toolbox API")
 
+import sys, logging
+logging.getLogger("uvicorn.error").info(f"Python exe -> {sys.executable}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
